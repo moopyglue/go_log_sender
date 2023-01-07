@@ -4,7 +4,7 @@
 #  defines how gls_client should be run
 #=====================================================
 
-command: C:\Users\moopy\AppData\Local\Programs\Thonny\thonny.exe
+command: /bin/sleep 999999
 logfile: out.log
 server: ws://localhost:9292/avaloq/v1
 flags: startatstart removelogfile

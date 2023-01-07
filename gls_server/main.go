@@ -70,7 +70,6 @@ func avaloqSession(w http.ResponseWriter, r *http.Request) {
 
 	logid := ""
 	if accepterr == nil {
-
 		// First (header) message should be text format
 		// and contain session information
 		log.Println("new connection request")
@@ -93,9 +92,7 @@ func avaloqSession(w http.ResponseWriter, r *http.Request) {
 			log.Println(logid, ": unable to complete handshake: ", err)
 			return
 		}
-
 		log.Println(logid, ": handshake complete")
-
 	} else {
 		log.Println(accepterr)
 		return
@@ -109,8 +106,8 @@ func avaloqSession(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if mtype != websocket.MessageBinary {
-			log.Println(logid, ": Unexpected non-binary data encountered")
 			// expecting binary log data,
+			log.Println(logid, ": Unexpected non-binary data encountered")
 			break
 		}
 		fmt.Printf("%s", string(data))

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+    "regexp"
 
 	"gopkg.in/yaml.v2"
 	"nhooyr.io/websocket"
@@ -77,17 +78,26 @@ func tailToServer(logfilename string, server string) {
 	c, _, err := websocket.Dial(ctx, server, nil)
 	if err != nil {
 		log.Println(err)
+        match, _ := regexp.MatchString("connection refused", fmt.Sprint(err))
+        if match {
+			time.Sleep(5 * time.Duration(timeout) * time.Millisecond)
+        }
 		return
 	}
-	defer c.Close(websocket.StatusInternalError, "websocket module internal error")
+    defer c.Close(websocket.StatusNormalClosure, "closing connection")
 
 	// handshake by sending session ID and receiving remote
 	// logfile length (for new file this will be "0")
 	log.Printf("sending session id %s to server %s\n", sessionid, server)
-	c.Write(ctx, websocket.MessageText, []byte(sessionid))
+	err6 := c.Write(ctx, websocket.MessageText, []byte(sessionid))
+    if err6 != nil {
+		log.Println(err,"Write() failed, disconecting")
+	    c.Close(websocket.StatusInternalError, "websocket Read() failed")
+    }
 	mtype, str, err2 := c.Read(ctx)
 	if err2 != nil {
-		log.Println(err)
+		log.Println(err,"Read() failed, disconecting")
+	    c.Close(websocket.StatusInternalError, "websocket Read() failed")
 		return
 	}
 	if mtype != websocket.MessageText {
@@ -113,6 +123,7 @@ func tailToServer(logfilename string, server string) {
 			}
 			if len(termination) > 0 {
 				// when termination requested
+		        log.Println(err,"normal ending while waiting for log creation")
 				return
 			}
 			time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
@@ -148,6 +159,7 @@ func tailToServer(logfilename string, server string) {
 			// pointer is at end of file
 			if len(termination) > 0 {
 				// when termination requested
+		        log.Println(err,"normal ending while tailing")
 				return
 			}
 			time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
@@ -183,8 +195,7 @@ func main() {
 		timeout = t
 	}
 
-	// run tailing and sending threads (go routines)
-	// REMOVE go tailLogFile(conf["logfile"])
+    // tail file to remote server (in background)
 	go func() {
 		for {
 			tailToServer(conf["logfile"], conf["server"])
@@ -196,33 +207,33 @@ func main() {
 		}
 	}()
 
-	// execute command
-	log.Printf("running command: %s", conf["command"])
-	c := exec.Command(conf["command"])
-	c.Run()
+	// execute command (in foreground)
+    cmd := strings.Fields(conf["command"])
+	log.Printf("running command: %#v", cmd)
+	c := exec.Command(cmd[0],cmd[1:]...)
+	err := c.Run()
+    if err != nil {
+	    log.Println("Run() complete:",err)
+    } else {
+	    log.Println("Run() complete: normal exit")
+    }
+
+    // send termination message and wait for response
+    // or timeout
 	termination <- "log file session ended"
 	countdown := timeout
 	for len(termination) > 0 && countdown > 0 {
 		countdown -= shortsleeploop
 		time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
-		log.Println(countdown)
 	}
+    log.Println("sender finished , exiting")
 
 }
 
 /*
 	TODO:
-	- allow for multiple params for the command
-	- test config values
-	- take config parameter as argv[1]
 	- review to avoid crash - as crash takes out the exec.Command()
-	- network connection routines
+    - FIX when waiting for Read or file to appear connection can go away and it is not known
 	- graceful closure
-
-	GRACEFUL CLOSURE
-	- need to flush all remaining log file reads
-	- need to empty the buffer channel
-	- write everything we can to server
-
 
 */
