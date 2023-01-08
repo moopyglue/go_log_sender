@@ -60,7 +60,7 @@ func notFoundSession(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-func avaloqSession(w http.ResponseWriter, r *http.Request) {
+func recordSession(w http.ResponseWriter, r *http.Request) {
 
 	c, accepterr := websocket.Accept(w, r, nil)
 	defer c.Close(websocket.StatusInternalError, "the sky is falling")
@@ -119,9 +119,9 @@ func avaloqSession(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func connect_listen(port string) {
+func connect_listen(port string, name string) {
 
-	http.HandleFunc("/avaloq/", avaloqSession)
+	http.HandleFunc("/"+name, recordSession)
 	http.HandleFunc("/", notFoundSession)
 
 	log.Print("Opening Server on port: ", port)
@@ -134,9 +134,19 @@ func main() {
 	// Read in yaml configuration
 	getConfig(configfile)
 
-	go connect_listen(conf["listenport"])
+	go connect_listen(conf["listenport"], conf["listenname"])
 	go monitor()
 
 	select {} // pause and just run daemon only
 
 }
+
+/*
+   TODO
+
+   - writw to log file
+   - report correct log file size to client
+   - pay attention to url - use url as part of filename/directory?
+   - what else can be configureable via config file? (for client also)
+
+*/

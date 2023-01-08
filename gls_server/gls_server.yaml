@@ -1,2 +1,4 @@
 listenport: 9292
+listenname: avaloqv1
 logdirectory: logs
+maxsessions: 5

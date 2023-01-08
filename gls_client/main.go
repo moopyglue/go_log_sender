@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 	"time"
-    "regexp"
 
 	"gopkg.in/yaml.v2"
 	"nhooyr.io/websocket"
@@ -58,46 +58,73 @@ func generateSessionID() {
 	if sessionid == "" {
 		// create a sessionid for this session
 		currentTime := time.Now()
+		hostname, _ := os.Hostname()
+		user, _ := user.Current()
+		auser := strings.Split(user.Username, "\\")
 		sessionid = fmt.Sprintf(
 			"%s-%s-%s-%d",
 			currentTime.Format("20060102-150405"),
-			os.Getenv("USERNAME"),
-			os.Getenv("COMPUTERNAME"),
+			auser[len(auser)-1],
+			hostname,
 			os.Getpid(),
 		)
+		log.Println("Session ID:", sessionid)
 	}
 }
 
 func tailToServer(logfilename string, server string) {
 
-	// create a timeout context
-	ctx, reclaim_context_resources := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-	defer reclaim_context_resources()
+	// Open the local log file
+	loopcount := 0
+	var f *os.File
+	var err error
+	for {
+		loopcount++
+		f, err = os.Open(logfilename)
+		if err != nil {
+			if loopcount == 1 {
+				log.Printf("log file does not yet exist - waiting")
+			}
+			if len(termination) > 0 {
+				// when termination requested
+				log.Println(err, "normal ending while waiting for log creation")
+				return
+			}
+			time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
+		} else {
+			break
+		}
+	}
+	log.Printf("log file open for reading - %s", logfilename)
+	defer f.Close()
 
-	// connect to server and send session id
-	c, _, err := websocket.Dial(ctx, server, nil)
+	// create a timeout context
+	ctx1, ctxreclaim1 := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
+	defer ctxreclaim1()
+
+	// upgrade connection to websocket connection
+	c, _, err := websocket.Dial(ctx1, server, nil)
 	if err != nil {
+		// connection issues get a longer retry loop
+		// TODO - randomize for better graceful recovery
 		log.Println(err)
-        match, _ := regexp.MatchString("connection refused", fmt.Sprint(err))
-        if match {
-			time.Sleep(5 * time.Duration(timeout) * time.Millisecond)
-        }
+		time.Sleep(time.Duration(5*timeout) * time.Millisecond)
 		return
 	}
-    defer c.Close(websocket.StatusNormalClosure, "closing connection")
+	defer c.Close(websocket.StatusNormalClosure, "closing connection")
 
 	// handshake by sending session ID and receiving remote
 	// logfile length (for new file this will be "0")
 	log.Printf("sending session id %s to server %s\n", sessionid, server)
-	err6 := c.Write(ctx, websocket.MessageText, []byte(sessionid))
-    if err6 != nil {
-		log.Println(err,"Write() failed, disconecting")
-	    c.Close(websocket.StatusInternalError, "websocket Read() failed")
-    }
-	mtype, str, err2 := c.Read(ctx)
+	err6 := c.Write(ctx1, websocket.MessageText, []byte(sessionid))
+	if err6 != nil {
+		log.Println(err, "Write() failed, disconecting")
+		c.Close(websocket.StatusInternalError, "websocket Read() failed")
+	}
+	mtype, str, err2 := c.Read(ctx1)
 	if err2 != nil {
-		log.Println(err,"Read() failed, disconecting")
-	    c.Close(websocket.StatusInternalError, "websocket Read() failed")
+		log.Println(err, "Read() failed, disconecting")
+		c.Close(websocket.StatusInternalError, "websocket Read() failed")
 		return
 	}
 	if mtype != websocket.MessageText {
@@ -110,29 +137,6 @@ func tailToServer(logfilename string, server string) {
 		return
 	}
 	log.Printf("received file length %d, handshake complete", remoteSize)
-
-	// Open the local log file
-	loopcount := 0
-	var f *os.File
-	for {
-		loopcount++
-		f, err = os.Open(logfilename)
-		if err != nil {
-			if loopcount == 1 {
-				log.Printf("log file does not yet exist - waiting")
-			}
-			if len(termination) > 0 {
-				// when termination requested
-		        log.Println(err,"normal ending while waiting for log creation")
-				return
-			}
-			time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
-		} else {
-			break
-		}
-	}
-	log.Printf("log file open for reading - %s", logfilename)
-	defer f.Close()
 
 	// tail from where server log file ends
 	// if local file smaller tail from local end
@@ -150,6 +154,7 @@ func tailToServer(logfilename string, server string) {
 	}
 
 	// watch logfile and send data to server
+	log.Printf("moved to file position %d, entering read/send loop", remoteSize)
 	for {
 
 		// read data from log file
@@ -159,7 +164,7 @@ func tailToServer(logfilename string, server string) {
 			// pointer is at end of file
 			if len(termination) > 0 {
 				// when termination requested
-		        log.Println(err,"normal ending while tailing")
+				log.Println(err, "normal ending while tailing")
 				return
 			}
 			time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
@@ -170,7 +175,9 @@ func tailToServer(logfilename string, server string) {
 		}
 
 		// write data to remote server
-		err = c.Write(ctx, websocket.MessageBinary, databytes)
+		ctx2, ctxreclaim2 := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
+		err = c.Write(ctx2, websocket.MessageBinary, databytes)
+		ctxreclaim2()
 		if err != nil {
 			log.Println(err)
 			return
@@ -195,7 +202,7 @@ func main() {
 		timeout = t
 	}
 
-    // tail file to remote server (in background)
+	// tail file to remote server (in background)
 	go func() {
 		for {
 			tailToServer(conf["logfile"], conf["server"])
@@ -208,25 +215,35 @@ func main() {
 	}()
 
 	// execute command (in foreground)
-    cmd := strings.Fields(conf["command"])
+	cmd := strings.Fields(conf["command"])
 	log.Printf("running command: %#v", cmd)
-	c := exec.Command(cmd[0],cmd[1:]...)
+	c := exec.Command(cmd[0], cmd[1:]...)
 	err := c.Run()
-    if err != nil {
-	    log.Println("Run() complete:",err)
-    } else {
-	    log.Println("Run() complete: normal exit")
-    }
+	if err != nil {
+		log.Println("Run() complete:", err)
+	} else {
+		log.Println("Run() complete: normal exit")
+	}
 
-    // send termination message and wait for response
-    // or timeout
+	// send termination message and wait for response
+	// or timeout
 	termination <- "log file session ended"
+	log.Println("Waiting for final log lines to be sent to server")
 	countdown := timeout
-	for len(termination) > 0 && countdown > 0 {
+	for {
+		if countdown <= 0 {
+			log.Println("Giving up")
+			break
+		}
 		countdown -= shortsleeploop
 		time.Sleep(time.Duration(shortsleeploop) * time.Millisecond)
+		if len(termination) == 0 {
+			log.Println("Successful compeltion of log sending")
+			break
+		}
+		log.Println("waiting...")
 	}
-    log.Println("sender finished , exiting")
+	log.Println("sender finished , exiting")
 
 }
 
@@ -234,6 +251,5 @@ func main() {
 	TODO:
 	- review to avoid crash - as crash takes out the exec.Command()
     - FIX when waiting for Read or file to appear connection can go away and it is not known
-	- graceful closure
 
 */
