@@ -9,4 +9,3 @@ logfile: out.log
 server: ws://localhost:9292/avaloqv1
 flags: removelogfile restartwhenshrunk
 timeout: 5000
-|

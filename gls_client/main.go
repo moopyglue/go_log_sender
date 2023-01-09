@@ -16,11 +16,11 @@ import (
 )
 
 var conf = make(map[string]string)
-var buffer = make(chan []byte, 2000)
 var termination = make(chan string, 10)
 var configfile = "gls_client.yaml"
 var timeout = 5000
 var shortsleeploop = 500
+var bufsize = 16000
 
 func getConfig(filename string) {
 
@@ -133,34 +133,48 @@ func tailToServer(logfilename string, server string) {
 	}
 	remoteSize, err3 := strconv.ParseInt(string(str), 10, 64)
 	if err3 != nil {
-		log.Println("remote provided file size not an integer: ", str, ":", err)
+		log.Println("remote provided file size not an integer: ", str, ":", err3)
 		return
 	}
 	log.Printf("received file length %d, handshake complete", remoteSize)
 
 	// tail from where server log file ends
-	// if local file smaller tail from local end
 	endptr, err4 := f.Seek(0, 2)
 	if err4 != nil {
-		log.Println(err, ": disconnecting 1")
+		log.Println(err, ": exiting tail loop on failed seek 1")
 		return
 	}
 	if endptr > remoteSize {
-		_, err5 := f.Seek(remoteSize, 0)
-		if err5 != nil {
-			log.Println(err, ": disconnecting 2")
+		// we have local content which has not been reflected remotely
+		// reset the read point to after the last byte sent
+		endptr = remoteSize
+		_, err := f.Seek(remoteSize, 0)
+		if err != nil {
+			log.Println(err, ": exiting tail loop on failed seek 2")
+			return
+		}
+	}
+	if endptr < remoteSize && conf["flag.restartwhenshrunk"] == "true" {
+		// the remote file is larger than the local file
+		// Norally we start from the end of local log file but if
+		// flag 'restartwhenshrunk' is set then wind back to begining of the file
+		endptr = 0
+		_, err := f.Seek(0, 0)
+		if err != nil {
+			log.Println(err, ": exiting tail loop on failed seek 3")
 			return
 		}
 	}
 
+	// MAIN TAIL/SEND LOOP
 	// watch logfile and send data to server
-	log.Printf("moved to file position %d, entering read/send loop", remoteSize)
+	log.Printf("moved to file position %d, entering read/send loop", endptr)
 	for {
 
-		// read data from log file
-		databytes := make([]byte, 2000)
-		n, err := f.Read(databytes)
-		if n == 0 {
+		// READ DATA from log file
+		databytes := make([]byte, bufsize)
+		nbytes, err := f.Read(databytes)
+		if nbytes == 0 {
 			// pointer is at end of file
 			if len(termination) > 0 {
 				// when termination requested
@@ -174,9 +188,10 @@ func tailToServer(logfilename string, server string) {
 			return
 		}
 
-		// write data to remote server
+		// WRITE DATA to remote server
 		ctx2, ctxreclaim2 := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-		err = c.Write(ctx2, websocket.MessageBinary, databytes)
+		err = c.Write(ctx2, websocket.MessageBinary, databytes[0:nbytes])
+		fmt.Println(sessionid, "sent", nbytes, "bytes")
 		ctxreclaim2()
 		if err != nil {
 			log.Println(err)
