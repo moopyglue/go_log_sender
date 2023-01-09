@@ -165,5 +165,8 @@ func main() {
    TODO
 
    - what else can be configureable via config file? (for client also)
+   - volume test
+   - volume fail gracefully
+   - creat monitor showing active connections + bytes recieveing
 
 */

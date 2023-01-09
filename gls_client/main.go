@@ -191,7 +191,7 @@ func tailToServer(logfilename string, server string) {
 		// WRITE DATA to remote server
 		ctx2, ctxreclaim2 := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 		err = c.Write(ctx2, websocket.MessageBinary, databytes[0:nbytes])
-		fmt.Println(sessionid, "sent", nbytes, "bytes")
+		log.Println(sessionid, "sent", nbytes, "bytes")
 		ctxreclaim2()
 		if err != nil {
 			log.Println(err)

@@ -4,7 +4,7 @@
 #  defines how gls_client should be run
 #=====================================================
 
-command: sleep 999999
+command: sleep 300
 logfile: out.log
 server: ws://localhost:9292/avaloqv1
 flags: removelogfile restartwhenshrunk
