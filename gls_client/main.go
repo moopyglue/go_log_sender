@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -202,34 +203,47 @@ func tailToServer(logfilename string, server string) {
 
 }
 
+func daemonTailToServer() {
+	// daemon go routine to re-initialize session when issue occur
+	for {
+		tailToServer(conf["logfile"], conf["server"])
+		if len(termination) > 0 {
+			// if termination chanel is not empty then we have been
+			// signalled to end so break out of daemon loop
+			<-termination
+			break
+		}
+		time.Sleep(time.Duration(timeout) * time.Millisecond)
+	}
+}
+
 func main() {
 
-	generateSessionID()
-	getConfig(configfile)
+	// first parameter is config file but use default if not provided
+	flag.Parse()
+	if len(flag.Args()) >= 1 {
+		configfile = flag.Args()[0]
+	}
 
-	// wipe logfile on startup if requested
+	// Parse the fconfig information
+	getConfig(configfile)
+	t, _ := strconv.Atoi(conf["timeout"])
+	if t > 0 {
+		timeout = t
+
+	}
 	if conf["flag.removelogfile"] == "true" {
 		log.Printf("removing log file")
 		os.Remove(conf["logfile"])
 	}
-	t, _ := strconv.Atoi(conf["timeout"])
-	if t > 0 {
-		timeout = t
-	}
 
-	// tail file to remote server (in background)
-	go func() {
-		for {
-			tailToServer(conf["logfile"], conf["server"])
-			if len(termination) > 0 {
-				<-termination
-				break
-			}
-			time.Sleep(time.Duration(timeout) * time.Millisecond)
-		}
-	}()
+	// get client session unique ID
+	generateSessionID()
 
-	// execute command (in foreground)
+	// IN BACKGROUND, tail file to remote server
+	go daemonTailToServer()
+
+	// IN FOREGROUND, execute command
 	cmd := strings.Fields(conf["command"])
 	log.Printf("running command: %#v", cmd)
 	c := exec.Command(cmd[0], cmd[1:]...)
@@ -240,8 +254,9 @@ func main() {
 		log.Println("Run() complete: normal exit")
 	}
 
+	// COMMAND COMPLETE
 	// send termination message and wait for response
-	// or timeout
+	// or timeout for graceful closure
 	termination <- "log file session ended"
 	log.Println("Waiting for final log lines to be sent to server")
 	countdown := timeout
